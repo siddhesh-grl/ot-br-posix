@@ -60,8 +60,8 @@ def get_ipaddr():
 
 def advertise_bbr(s: socket.socket, src):
     bbr_info = {
-        'ven': 'OpenThread_BR',
-        'mod': 'OpenThread_BR',
+        'ven': 'OT13_BR',
+        'mod': 'OT13_BR',
         'ver': '1.0',
         'add': get_ipaddr(),
         'por': 22,

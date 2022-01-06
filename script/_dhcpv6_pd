@@ -39,7 +39,7 @@ else
     WAN_INTERFACE="eth0"
 fi
 
-WLAN_INTERFACE="wlan0"
+WLAN_INTERFACE="eth0"
 WPAN_INTERFACE="wpan0"
 
 DHCPCD_CONF="/etc/dhcpcd.conf"

@@ -32,7 +32,7 @@ project(openthread-br VERSION 0.3.0)
 
 add_library(otbr-config INTERFACE)
 
-set(OTBR_INFRA_IF_NAME "wlan0" CACHE STRING "The infrastructure interface name")
+set(OTBR_INFRA_IF_NAME "eth0" CACHE STRING "The infrastructure interface name")
 set(OTBR_VENDOR_NAME "OpenThread" CACHE STRING "The vendor name")
 set(OTBR_PRODUCT_NAME "BorderRouter" CACHE STRING "The product name")
 set(OTBR_NAME "${OTBR_VENDOR_NAME}_${OTBR_PRODUCT_NAME}" CACHE STRING "The package name")
