@@ -27,6 +27,7 @@
 #
 
 add_executable(otbr-agent
+    application.cpp
     main.cpp
     uris.hpp
     instance_params.cpp
@@ -35,24 +36,28 @@ add_executable(otbr-agent
 )
 
 target_link_libraries(otbr-agent PRIVATE
+    $<$<BOOL:${OTBR_BORDER_AGENT}>:otbr-border-agent>
+    $<$<BOOL:${OTBR_BACKBONE_ROUTER}>:otbr-backbone-router>
     $<$<BOOL:${OTBR_DBUS}>:otbr-dbus-server>
     $<$<BOOL:${OTBR_MDNS}>:otbr-mdns>
     $<$<BOOL:${OTBR_OPENWRT}>:otbr-ubus>
     $<$<BOOL:${OTBR_REST}>:otbr-rest>
-    $<$<BOOL:${OTBR_BACKBONE_ROUTER}>:otbr-backbone-router>
     openthread-posix
     openthread-cli-ftd
     openthread-ftd
     openthread-spinel-rcp
     openthread-hdlc
-    otbr-border-agent
     otbr-sdp-proxy
     otbr-ncp
     otbr-common
     otbr-utils
 )
 
-add_dependencies(otbr-agent ot-ctl print-ot-config otbr-border-agent otbr-sdp-proxy otbr-utils otbr-ncp)
+add_dependencies(otbr-agent ot-ctl print-ot-config otbr-sdp-proxy otbr-utils otbr-ncp)
+if (OTBR_BORDER_AGENT)
+    add_dependencies(otbr-agent otbr-border-agent)
+endif()
+
 install(TARGETS otbr-agent DESTINATION sbin)
 
 if(CMAKE_VERSION VERSION_LESS 3.13)
@@ -90,8 +95,16 @@ elseif(NOT OTBR_OPENWRT)
         RENAME otbr-agent)
 endif()
 
+set(OTBR_NO_AUTO_ATTACH "0" CACHE STRING "Set to 1 to disable auto Thread attach")
+
 configure_file(otbr-agent.default.in otbr-agent.default)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/otbr-agent.default
     DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/default
     RENAME otbr-agent
 )
+
+pkg_check_modules(LIBSYSTEMD libsystemd)
+if(LIBSYSTEMD_FOUND)
+    target_compile_definitions(otbr-config INTERFACE "HAVE_LIBSYSTEMD=1")
+    target_link_libraries(otbr-agent PUBLIC ${LIBSYSTEMD_LIBRARIES})
+endif()

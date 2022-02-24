@@ -1,5 +1,5 @@
 /*
- *    Copyright (c) 2020, The OpenThread Authors.
+ *    Copyright (c) 2021, The OpenThread Authors.
  *    All rights reserved.
  *
  *    Redistribution and use in source and binary forms, with or without
@@ -26,81 +26,42 @@
  *    POSSIBILITY OF SUCH DAMAGE.
  */
 
-/**
- * @file
- *   This file includes definition for DUA routing functionalities.
- */
+#include "common/callback.hpp"
 
-#ifndef BACKBONE_ROUTER_DUA_ROUTING_MANAGER
-#define BACKBONE_ROUTER_DUA_ROUTING_MANAGER
+#include <CppUTest/TestHarness.h>
 
-#if OTBR_ENABLE_DUA_ROUTING
+TEST_GROUP(IsNull){};
 
-#include <set>
-#include <openthread/backbone_router_ftd.h>
-
-#include "agent/instance_params.hpp"
-#include "common/code_utils.hpp"
-#include "ncp/ncp_openthread.hpp"
-#include "utils/system_utils.hpp"
-
-namespace otbr {
-namespace BackboneRouter {
-
-/**
- * @addtogroup border-router-backbone
- *
- * @brief
- *   This module includes definition for DUA routing functionalities.
- *
- * @{
- */
-
-/**
- * This class implements the DUA routing manager.
- *
- */
-class DuaRoutingManager : private NonCopyable
+TEST(IsNull, NullptrIsNull)
 {
-public:
-    /**
-     * This constructor initializes a DUA routing manager instance.
-     *
-     */
-    explicit DuaRoutingManager()
-        : mEnabled(false)
-    {
-    }
+    otbr::OnceCallback<void(void)> noop = nullptr;
 
-    /**
-     * This method enables the DUA routing manager.
-     *
-     */
-    void Enable(const Ip6Prefix &aDomainPrefix);
+    CHECK_TRUE(noop.IsNull());
+}
 
-    /**
-     * This method disables the DUA routing manager.
-     *
-     */
-    void Disable(void);
+TEST(IsNull, NonNullptrIsNotNull)
+{
+    otbr::OnceCallback<void(void)> noop = [](void) {};
 
-private:
-    void AddDefaultRouteToThread(void);
-    void DelDefaultRouteToThread(void);
-    void AddPolicyRouteToBackbone(void);
-    void DelPolicyRouteToBackbone(void);
+    CHECK_FALSE(noop.IsNull());
+}
 
-    Ip6Prefix mDomainPrefix;
-    bool      mEnabled : 1;
-};
+TEST(IsNull, IsNullAfterInvoking)
+{
+    otbr::OnceCallback<int(int)> square = [](int x) { return x * x; };
 
-/**
- * @}
- */
+    std::move(square)(5);
 
-} // namespace BackboneRouter
-} // namespace otbr
+    CHECK_TRUE(square.IsNull());
+}
 
-#endif // OTBR_ENABLE_DUA_ROUTING
+TEST_GROUP(VerifyInvocation){};
 
-#endif // BACKBONE_ROUTER_DUA_ROUTING_MANAGER
+TEST(VerifyInvocation, CallbackResultIsExpected)
+{
+    otbr::OnceCallback<int(int)> square = [](int x) { return x * x; };
+
+    int ret = std::move(square)(5);
+
+    CHECK_EQUAL(ret, 25);
+}

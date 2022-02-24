@@ -26,37 +26,12 @@
 #  POSSIBILITY OF SUCH DAMAGE.
 #
 
-name: macOS
+add_library(otbr-trel-dnssd
+    trel_dnssd.cpp
+    trel_dnssd.hpp
+)
 
-on:
-  push:
-    branches-ignore:
-      - 'dependabot/**'
-  pull_request:
-    branches:
-      - 'main'
-
-jobs:
-
-  cancel-previous-runs:
-    runs-on: ubuntu-20.04
-    steps:
-    - uses: rokroskar/workflow-run-cleanup-action@master
-      env:
-        GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-      if: "github.ref != 'refs/heads/main'"
-
-  build-check:
-    runs-on: macos-10.15
-    steps:
-    - uses: actions/checkout@v2
-      with:
-        submodules: true
-    - name: Bootstrap
-      run: |
-        rm -f '/usr/local/bin/2to3'
-        brew update
-        brew reinstall boost cmake cpputest dbus jsoncpp ninja
-    - name: Build
-      run: |
-        OTBR_OPTIONS='-DOTBR_BORDER_AGENT=OFF -DOTBR_MDNS=OFF -DOT_FIREWALL=OFF' ./script/test build
+target_link_libraries(otbr-trel-dnssd PRIVATE
+    $<$<BOOL:${OTBR_MDNS}>:otbr-mdns>
+    otbr-common
+)
