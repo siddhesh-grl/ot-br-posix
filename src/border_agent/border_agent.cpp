@@ -44,6 +44,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <iomanip>
 #include <random>
 #include <sstream>
 
@@ -107,7 +108,6 @@ BorderAgent::BorderAgent(otbr::Ncp::ControllerOpenThread &aNcp)
 #if OTBR_ENABLE_TREL
     , mTrelDnssd(aNcp, *mPublisher)
 #endif
-    , mServiceInstanceName(kBorderAgentServiceInstanceName)
 {
 }
 
@@ -119,7 +119,14 @@ void BorderAgent::Init(void)
     mNcp.GetThreadHelper()->SetUpdateMeshCopTxtHandler([this](std::map<std::string, std::vector<uint8_t>> aUpdate) {
         HandleUpdateVendorMeshCoPTxtEntries(std::move(aUpdate));
     });
+    mNcp.RegisterResetHandler([this]() {
+        mNcp.GetThreadHelper()->SetUpdateMeshCopTxtHandler([this](std::map<std::string, std::vector<uint8_t>> aUpdate) {
+            HandleUpdateVendorMeshCoPTxtEntries(std::move(aUpdate));
+        });
+    });
 #endif
+
+    mServiceInstanceName = BaseServiceInstanceName();
 
     Start();
 }
@@ -189,6 +196,15 @@ void BorderAgent::HandleMdnsState(Mdns::Publisher::State aState)
     }
 }
 
+static uint64_t ConvertTimestampToUint64(const otTimestamp &aTimestamp)
+{
+    // 64 bits Timestamp fields layout
+    //-----48 bits------//-----15 bits-----//-------1 bit-------//
+    //     Seconds      //      Ticks      //  Authoritative    //
+    return (aTimestamp.mSeconds << 16) | static_cast<uint64_t>(aTimestamp.mTicks << 1) |
+           static_cast<uint64_t>(aTimestamp.mAuthoritative);
+}
+
 void BorderAgent::PublishMeshCopService(void)
 {
     StateBitmap              state;
@@ -236,7 +252,6 @@ void BorderAgent::PublishMeshCopService(void)
     {
         otError              error;
         otOperationalDataset activeDataset;
-        uint64_t             activeTimestamp;
         uint32_t             partitionId;
 
         if ((error = otDatasetGetActive(instance, &activeDataset)) != OT_ERROR_NONE)
@@ -245,8 +260,11 @@ void BorderAgent::PublishMeshCopService(void)
         }
         else
         {
-            activeTimestamp = htobe64(activeDataset.mActiveTimestamp);
-            txtList.emplace_back("at", reinterpret_cast<uint8_t *>(&activeTimestamp), sizeof(activeTimestamp));
+            uint64_t activeTimestampValue = ConvertTimestampToUint64(activeDataset.mActiveTimestamp);
+
+            activeTimestampValue = htobe64(activeTimestampValue);
+            txtList.emplace_back("at", reinterpret_cast<uint8_t *>(&activeTimestampValue),
+                                 sizeof(activeTimestampValue));
         }
 
         partitionId = otThreadGetPartitionId(instance);
@@ -304,8 +322,19 @@ void BorderAgent::PublishMeshCopService(void)
 
     mPublisher->PublishService(/* aHostName */ "", mServiceInstanceName, kBorderAgentServiceType,
                                Mdns::Publisher::SubTypeList{}, port, txtList, [this](otbrError aError) {
-                                   otbrLogResult(aError, "Result of publish meshcop service %s.%s.local",
-                                                 mServiceInstanceName.c_str(), kBorderAgentServiceType);
+                                   if (aError == OTBR_ERROR_ABORTED)
+                                   {
+                                       // OTBR_ERROR_ABORTED is thrown when an ongoing service registration is
+                                       // cancelled. This can happen when the meshcop service is being updated
+                                       // frequently. To avoid false alarms, it should not be logged like a real error.
+                                       otbrLogInfo("Cancelled previous publishing meshcop service %s.%s.local",
+                                                   mServiceInstanceName.c_str(), kBorderAgentServiceType);
+                                   }
+                                   else
+                                   {
+                                       otbrLogResult(aError, "Result of publish meshcop service %s.%s.local",
+                                                     mServiceInstanceName.c_str(), kBorderAgentServiceType);
+                                   }
                                    if (aError == OTBR_ERROR_DUPLICATED)
                                    {
                                        // Try to unpublish current service in case we are trying to register
@@ -372,6 +401,18 @@ bool BorderAgent::IsThreadStarted(void) const
     return role == OT_DEVICE_ROLE_CHILD || role == OT_DEVICE_ROLE_ROUTER || role == OT_DEVICE_ROLE_LEADER;
 }
 
+std::string BorderAgent::BaseServiceInstanceName() const
+{
+    const otExtAddress *extAddress = otLinkGetExtendedAddress(mNcp.GetInstance());
+    std::stringstream   ss;
+
+    ss << kBorderAgentServiceInstanceName << " #";
+    ss << std::uppercase << std::hex << std::setfill('0');
+    ss << std::setw(2) << static_cast<int>(extAddress->m8[6]);
+    ss << std::setw(2) << static_cast<int>(extAddress->m8[7]);
+    return ss.str();
+}
+
 std::string BorderAgent::GetAlternativeServiceInstanceName() const
 {
     std::random_device                      r;
@@ -380,7 +421,7 @@ std::string BorderAgent::GetAlternativeServiceInstanceName() const
     uint16_t                                rand = uniform_dist(engine);
     std::stringstream                       ss;
 
-    ss << kBorderAgentServiceInstanceName << " (" << rand << ")";
+    ss << BaseServiceInstanceName() << " (" << rand << ")";
     return ss.str();
 }
 

@@ -66,7 +66,7 @@ struct ActiveScanResult
     uint8_t              mLqi;           ///< LQI
     uint8_t              mVersion;       ///< Version
     bool                 mIsNative;      ///< Native Commissioner flag
-    bool                 mIsJoinable;    ///< Joining Permitted flag
+    bool                 mDiscover;      ///< Result from MLE Discovery
 };
 
 struct EnergyScanResult
@@ -95,6 +95,11 @@ struct OnMeshPrefix
      * The IPv6 prefix.
      */
     Ip6Prefix mPrefix;
+
+    /**
+     * The Rloc associated with the Border Router prefix.
+     */
+    uint16_t mRloc16;
 
     /**
      * A 2-bit signed integer indicating router preference as defined in RFC 4191.
@@ -127,14 +132,24 @@ struct OnMeshPrefix
     bool mDefaultRoute;
 
     /**
-     * TRUE, if this prefix is considered on-mesh.  FALSE, otherwise.
+     * TRUE if this prefix is considered on-mesh. FALSE otherwise.
      */
     bool mOnMesh;
 
     /**
-     * TRUE, if this configuration is considered Stable Network Data.  FALSE, otherwise.
+     * TRUE if this configuration is considered Stable Network Data. FALSE otherwise.
      */
     bool mStable;
+
+    /**
+     * TRUE if this border router can supply DNS information via ND. FALSE otherwise.
+     */
+    bool mNdDns;
+
+    /**
+     * TRUE if this prefix is a Thread Domain Prefix. FALSE otherwise.
+     */
+    bool mDp;
 };
 
 struct ExternalRoute
@@ -500,6 +515,65 @@ struct TxtEntry
 {
     std::string          mKey;
     std::vector<uint8_t> mValue;
+};
+
+enum SrpServerState : uint8_t
+{
+    OTBR_SRP_SERVER_STATE_DISABLED = 0, ///< The SRP server is disabled.
+    OTBR_SRP_SERVER_STATE_RUNNING  = 1, ///< The SRP server is running.
+    OTBR_SRP_SERVER_STATE_STOPPED  = 2, ///< The SRP server is stopped.
+};
+
+enum SrpServerAddressMode : uint8_t
+{
+    OTBR_SRP_SERVER_ADDRESS_MODE_UNICAST = 0, ///< Unicast address mode.
+    OTBR_SRP_SERVER_ADDRESS_MODE_ANYCAST = 1, ///< Anycast address mode.
+};
+
+struct SrpServerInfo
+{
+    struct Registration
+    {
+        uint32_t mFreshCount;        ///< The number of active hosts/services registered on the SRP server
+        uint32_t mDeletedCount;      ///< The number of hosts/services in 'Deleted' state on the SRP server
+        uint64_t mLeaseTimeTotal;    ///< The sum of lease time in milliseconds of all active hosts/services
+                                     ///< on the SRP server
+        uint64_t mKeyLeaseTimeTotal; ///< The sum of key lease time in milliseconds of all active hosts/services on the
+                                     ///< SRP server
+        uint64_t mRemainingLeaseTimeTotal;    ///< The sum of remaining lease time in milliseconds of all active
+                                              ///< hosts/services on the SRP server
+        uint64_t mRemainingKeyLeaseTimeTotal; ///< The sum of remaining key lease time in milliseconds of all active
+                                              ///< hosts/services on the SRP server
+    };
+
+    struct ResponseCounters
+    {
+        uint32_t mSuccess;       ///< The number of successful responses
+        uint32_t mServerFailure; ///< The number of server failure responses
+        uint32_t mFormatError;   ///< The number of format error responses
+        uint32_t mNameExists;    ///< The number of 'name exists' responses
+        uint32_t mRefused;       ///< The number of refused responses
+        uint32_t mOther;         ///< The number of other responses
+    };
+
+    SrpServerState       mState;            ///< The state of the SRP server
+    uint16_t             mPort;             ///< The listening port number
+    SrpServerAddressMode mAddressMode;      ///< The address mode {unicast, anycast} of the SRP server
+    Registration         mHosts;            ///< The registration information of hosts on the SRP server
+    Registration         mServices;         ///< The registration information of services on the SRP server
+    ResponseCounters     mResponseCounters; ///< The counters of response codes sent by the SRP server
+};
+
+struct DnssdCounters
+{
+    uint32_t mSuccessResponse;        ///< The number of successful responses
+    uint32_t mServerFailureResponse;  ///< The number of server failure responses
+    uint32_t mFormatErrorResponse;    ///< The number of format error responses
+    uint32_t mNameErrorResponse;      ///< The number of name error responses
+    uint32_t mNotImplementedResponse; ///< The number of 'not implemented' responses
+    uint32_t mOtherResponse;          ///< The number of other responses
+
+    uint32_t mResolvedBySrp; ///< The number of queries completely resolved by the local SRP server
 };
 
 } // namespace DBus

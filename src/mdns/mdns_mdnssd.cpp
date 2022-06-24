@@ -40,6 +40,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -253,6 +254,8 @@ void PublisherMDnsSd::Stop(void)
 
     mSubscribedHosts.clear();
 
+    mState = State::kIdle;
+
 exit:
     return;
 }
@@ -337,7 +340,9 @@ void PublisherMDnsSd::Process(const MainloopContext &aMainloop)
 
         if (error != kDNSServiceErr_NoError)
         {
-            otbrLogWarning("DNSServiceProcessResult failed: %s (serviceRef = %p)", DNSErrorToString(error), serviceRef);
+            otbrLogLevel logLevel = (error == kDNSServiceErr_BadReference) ? OTBR_LOG_INFO : OTBR_LOG_WARNING;
+            otbrLog(logLevel, OTBR_LOG_TAG, "DNSServiceProcessResult failed: %s (serviceRef = %p)",
+                    DNSErrorToString(error), serviceRef);
         }
         if (error == kDNSServiceErr_ServiceNotRunning)
         {
@@ -484,6 +489,8 @@ void PublisherMDnsSd::PublishService(const std::string &aHostName,
     DNSServiceRef        serviceRef        = nullptr;
     std::string          fullHostName;
 
+    VerifyOrExit(mState == State::kReady, ret = OTBR_ERROR_INVALID_STATE);
+
     if (!aHostName.empty())
     {
         fullHostName = MakeFullHostName(aHostName);
@@ -522,8 +529,13 @@ exit:
 
 void PublisherMDnsSd::UnpublishService(const std::string &aName, const std::string &aType, ResultCallback &&aCallback)
 {
+    otbrError error = OTBR_ERROR_NONE;
+
+    VerifyOrExit(mState == Publisher::State::kReady, error = OTBR_ERROR_INVALID_STATE);
     RemoveServiceRegistration(aName, aType, OTBR_ERROR_ABORTED);
-    std::move(aCallback)(OTBR_ERROR_NONE);
+
+exit:
+    std::move(aCallback)(error);
 }
 
 void PublisherMDnsSd::PublishHost(const std::string &         aName,
@@ -534,6 +546,8 @@ void PublisherMDnsSd::PublishHost(const std::string &         aName,
     int          error = 0;
     std::string  fullName;
     DNSRecordRef recordRef = nullptr;
+
+    VerifyOrExit(mState == Publisher::State::kReady, ret = OTBR_ERROR_INVALID_STATE);
 
     // Supports only IPv6 for now, may support IPv4 in the future.
     VerifyOrExit(aAddress.size() == OTBR_IP6_ADDRESS_SIZE, error = OTBR_ERROR_INVALID_ARGS);
@@ -573,14 +587,16 @@ exit:
 
 void PublisherMDnsSd::UnpublishHost(const std::string &aName, ResultCallback &&aCallback)
 {
-    otbrLogInfo("Removing host %s", MakeFullHostName(aName).c_str());
+    otbrError error = OTBR_ERROR_NONE;
 
+    VerifyOrExit(mState == Publisher::State::kReady, error = OTBR_ERROR_INVALID_STATE);
     RemoveHostRegistration(aName, OTBR_ERROR_ABORTED);
 
+exit:
     // We may failed to unregister the host from underlying mDNS publishers, but
     // it usually means that the mDNS publisher is already not functioning. So it's
     // okay to return success directly since the service is not advertised anyway.
-    std::move(aCallback)(OTBR_ERROR_NONE);
+    std::move(aCallback)(error);
 }
 
 void PublisherMDnsSd::HandleRegisterHostResult(DNSServiceRef       aServiceRef,
@@ -617,7 +633,7 @@ void PublisherMDnsSd::HandleRegisterHostResult(DNSServiceRef       aServiceRef,
     }
     else
     {
-        otbrLogWarning("failed to register host %s for mdnssd error: %s", hostName.c_str(), DNSErrorToString(aError));
+        otbrLogWarning("Failed to register host %s for mdnssd error: %s", hostName.c_str(), DNSErrorToString(aError));
         RemoveHostRegistration(hostReg->mName, error);
     }
 
@@ -642,9 +658,10 @@ std::string PublisherMDnsSd::MakeRegType(const std::string &aType, SubTypeList a
 
 void PublisherMDnsSd::SubscribeService(const std::string &aType, const std::string &aInstanceName)
 {
+    VerifyOrExit(mState == Publisher::State::kReady);
     mSubscribedServices.push_back(MakeUnique<ServiceSubscription>(*this, aType, aInstanceName));
 
-    otbrLogInfo("subscribe service %s.%s (total %zu)", aInstanceName.c_str(), aType.c_str(),
+    otbrLogInfo("Subscribe service %s.%s (total %zu)", aInstanceName.c_str(), aType.c_str(),
                 mSubscribedServices.size());
 
     if (aInstanceName.empty())
@@ -655,49 +672,63 @@ void PublisherMDnsSd::SubscribeService(const std::string &aType, const std::stri
     {
         mSubscribedServices.back()->Resolve(kDNSServiceInterfaceIndexAny, aInstanceName, aType, kDomain);
     }
+
+exit:
+    return;
 }
 
 void PublisherMDnsSd::UnsubscribeService(const std::string &aType, const std::string &aInstanceName)
 {
-    ServiceSubscriptionList::iterator it =
-        std::find_if(mSubscribedServices.begin(), mSubscribedServices.end(),
-                     [&aType, &aInstanceName](const std::unique_ptr<ServiceSubscription> &aService) {
-                         return aService->mType == aType && aService->mInstanceName == aInstanceName;
-                     });
+    ServiceSubscriptionList::iterator it;
 
+    VerifyOrExit(mState == Publisher::State::kReady);
+    it = std::find_if(mSubscribedServices.begin(), mSubscribedServices.end(),
+                      [&aType, &aInstanceName](const std::unique_ptr<ServiceSubscription> &aService) {
+                          return aService->mType == aType && aService->mInstanceName == aInstanceName;
+                      });
     assert(it != mSubscribedServices.end());
 
     mSubscribedServices.erase(it);
 
-    otbrLogInfo("unsubscribe service %s.%s (left %zu)", aInstanceName.c_str(), aType.c_str(),
+    otbrLogInfo("Unsubscribe service %s.%s (left %zu)", aInstanceName.c_str(), aType.c_str(),
                 mSubscribedServices.size());
+
+exit:
+    return;
 }
 
 void PublisherMDnsSd::OnServiceResolveFailed(const std::string & aType,
                                              const std::string & aInstanceName,
                                              DNSServiceErrorType aErrorCode)
 {
-    otbrLogWarning("Service %s.%s resolving failed: code=%d", aInstanceName.c_str(), aType.c_str(), aErrorCode);
+    otbrLogWarning("Resolve service %s.%s failed: code=%" PRId32, aInstanceName.c_str(), aType.c_str(), aErrorCode);
 }
 
 void PublisherMDnsSd::OnHostResolveFailed(const PublisherMDnsSd::HostSubscription &aHost,
                                           DNSServiceErrorType                      aErrorCode)
 {
-    otbrLogWarning("Host %s resolving failed: code=%d", aHost.mHostName.c_str(), aErrorCode);
+    otbrLogWarning("Resolve host %s failed: code=%" PRId32, aHost.mHostName.c_str(), aErrorCode);
 }
 
 void PublisherMDnsSd::SubscribeHost(const std::string &aHostName)
 {
+    VerifyOrExit(mState == State::kReady);
     mSubscribedHosts.push_back(MakeUnique<HostSubscription>(*this, aHostName));
 
-    otbrLogInfo("subscribe host %s (total %zu)", aHostName.c_str(), mSubscribedHosts.size());
+    otbrLogInfo("Subscribe host %s (total %zu)", aHostName.c_str(), mSubscribedHosts.size());
 
     mSubscribedHosts.back()->Resolve();
+
+exit:
+    return;
 }
 
 void PublisherMDnsSd::UnsubscribeHost(const std::string &aHostName)
 {
-    HostSubscriptionList ::iterator it = std::find_if(
+    HostSubscriptionList ::iterator it;
+
+    VerifyOrExit(mState == Publisher::State::kReady);
+    it = std::find_if(
         mSubscribedHosts.begin(), mSubscribedHosts.end(),
         [&aHostName](const std::unique_ptr<HostSubscription> &aHost) { return aHost->mHostName == aHostName; });
 
@@ -705,7 +736,10 @@ void PublisherMDnsSd::UnsubscribeHost(const std::string &aHostName)
 
     mSubscribedHosts.erase(it);
 
-    otbrLogInfo("unsubscribe host %s (remaining %d)", aHostName.c_str(), mSubscribedHosts.size());
+    otbrLogInfo("Unsubscribe host %s (remaining %d)", aHostName.c_str(), mSubscribedHosts.size());
+
+exit:
+    return;
 }
 
 Publisher *Publisher::Create(StateCallback aCallback)
@@ -796,7 +830,7 @@ void PublisherMDnsSd::ServiceSubscription::HandleBrowseResult(DNSServiceRef     
     OTBR_UNUSED_VARIABLE(aServiceRef);
     OTBR_UNUSED_VARIABLE(aDomain);
 
-    otbrLogInfo("DNSServiceBrowse reply: %s %s.%s inf %u, flags=%u, error=%d",
+    otbrLogInfo("DNSServiceBrowse reply: %s %s.%s inf %" PRIu32 ", flags=%" PRIu32 ", error=%" PRId32,
                 aFlags & kDNSServiceFlagsAdd ? "add" : "remove", aInstanceName, aType, aInterfaceIndex, aFlags,
                 aErrorCode);
 
@@ -924,7 +958,7 @@ void PublisherMDnsSd::ServiceInstanceResolution::HandleResolveResult(DNSServiceR
 exit:
     if (error != OTBR_ERROR_NONE)
     {
-        otbrLogWarning("failed to resolve service instance %s", aFullName);
+        otbrLogWarning("Failed to resolve service instance %s", aFullName);
     }
 
     if (aErrorCode != kDNSServiceErr_NoError || error != OTBR_ERROR_NONE)
@@ -980,8 +1014,9 @@ void PublisherMDnsSd::ServiceInstanceResolution::HandleGetAddrInfoResult(DNSServ
 
     Ip6Address address;
 
-    otbrLogDebug("DNSServiceGetAddrInfo reply: %d, flags=%u, host=%s, sa_family=%d", aErrorCode, aFlags, aHostName,
-                 aAddress->sa_family);
+    otbrLog(aErrorCode == kDNSServiceErr_NoError ? OTBR_LOG_INFO : OTBR_LOG_WARNING, OTBR_LOG_TAG,
+            "DNSServiceGetAddrInfo reply: flags=%" PRIu32 ", host=%s, sa_family=%u, error=%" PRId32, aFlags, aHostName,
+            static_cast<unsigned int>(aAddress->sa_family), aErrorCode);
 
     VerifyOrExit(aErrorCode == kDNSServiceErr_NoError);
     VerifyOrExit((aFlags & kDNSServiceFlagsAdd) && aAddress->sa_family == AF_INET6);
@@ -993,14 +1028,9 @@ void PublisherMDnsSd::ServiceInstanceResolution::HandleGetAddrInfoResult(DNSServ
     mInstanceInfo.mAddresses.push_back(address);
     mInstanceInfo.mTtl = aTtl;
 
-    otbrLogDebug("DNSServiceGetAddrInfo reply: address=%s, ttl=%u", address.ToString().c_str(), aTtl);
+    otbrLogInfo("DNSServiceGetAddrInfo reply: address=%s, ttl=%" PRIu32, address.ToString().c_str(), aTtl);
 
 exit:
-    if (aErrorCode != kDNSServiceErr_NoError)
-    {
-        otbrLogWarning("DNSServiceGetAddrInfo failed: %d", aErrorCode);
-    }
-
     if (!mInstanceInfo.mAddresses.empty() || aErrorCode != kDNSServiceErr_NoError)
     {
         FinishResolution();
@@ -1027,7 +1057,7 @@ void PublisherMDnsSd::HostSubscription::Resolve(void)
 
     assert(mServiceRef == nullptr);
 
-    otbrLogDebug("DNSServiceGetAddrInfo %s inf %d", fullHostName.c_str(), kDNSServiceInterfaceIndexAny);
+    otbrLogInfo("DNSServiceGetAddrInfo %s inf %d", fullHostName.c_str(), kDNSServiceInterfaceIndexAny);
 
     DNSServiceGetAddrInfo(&mServiceRef, /* flags */ 0, kDNSServiceInterfaceIndexAny,
                           kDNSServiceProtocol_IPv6 | kDNSServiceProtocol_IPv4, fullHostName.c_str(),
@@ -1060,8 +1090,9 @@ void PublisherMDnsSd::HostSubscription::HandleResolveResult(DNSServiceRef       
 
     Ip6Address address;
 
-    otbrLogDebug("DNSServiceGetAddrInfo reply: %d, flags=%u, host=%s, sa_family=%d", aErrorCode, aFlags, aHostName,
-                 aAddress->sa_family);
+    otbrLog(aErrorCode == kDNSServiceErr_NoError ? OTBR_LOG_INFO : OTBR_LOG_WARNING, OTBR_LOG_TAG,
+            "DNSServiceGetAddrInfo reply: flags=%" PRIu32 ", host=%s, sa_family=%u, error=%" PRId32, aFlags, aHostName,
+            static_cast<unsigned int>(aAddress->sa_family), aErrorCode);
 
     VerifyOrExit(aErrorCode == kDNSServiceErr_NoError);
     VerifyOrExit((aFlags & kDNSServiceFlagsAdd) && aAddress->sa_family == AF_INET6);
@@ -1074,7 +1105,7 @@ void PublisherMDnsSd::HostSubscription::HandleResolveResult(DNSServiceRef       
     mHostInfo.mAddresses.push_back(address);
     mHostInfo.mTtl = aTtl;
 
-    otbrLogDebug("DNSServiceGetAddrInfo reply: address=%s, ttl=%u", address.ToString().c_str(), aTtl);
+    otbrLogInfo("DNSServiceGetAddrInfo reply: address=%s, ttl=%" PRIu32, address.ToString().c_str(), aTtl);
 
     // NOTE: This `HostSubscription` object may be freed in `OnHostResolved`.
     mMDnsSd->OnHostResolved(mHostName, mHostInfo);
@@ -1082,8 +1113,6 @@ void PublisherMDnsSd::HostSubscription::HandleResolveResult(DNSServiceRef       
 exit:
     if (aErrorCode != kDNSServiceErr_NoError)
     {
-        otbrLogWarning("DNSServiceGetAddrInfo failed: %d", aErrorCode);
-
         mMDnsSd->OnHostResolveFailed(*this, aErrorCode);
     }
 }

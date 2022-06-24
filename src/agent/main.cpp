@@ -26,11 +26,16 @@
  *    POSSIBILITY OF SUCH DAMAGE.
  */
 
+#define OTBR_LOG_TAG "AGENT"
+
 #include <openthread-br/config.h>
 
+#include <algorithm>
 #include <fstream>
 #include <mutex>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include <getopt.h>
 #include <stdio.h>
@@ -47,7 +52,6 @@
 #endif
 
 #include "agent/application.hpp"
-#include "agent/instance_params.hpp"
 #include "common/code_utils.hpp"
 #include "common/logging.hpp"
 #include "common/mainloop.hpp"
@@ -67,9 +71,11 @@ enum
     OTBR_OPT_VERSION                 = 'V',
     OTBR_OPT_SHORTMAX                = 128,
     OTBR_OPT_RADIO_VERSION,
+    OTBR_OPT_AUTO_ATTACH,
 };
 
-static jmp_buf sResetJump;
+static jmp_buf            sResetJump;
+static otbr::Application *gApp = nullptr;
 
 void                       __gcov_flush();
 static const struct option kOptions[] = {
@@ -80,11 +86,51 @@ static const struct option kOptions[] = {
     {"verbose", no_argument, nullptr, OTBR_OPT_VERBOSE},
     {"version", no_argument, nullptr, OTBR_OPT_VERSION},
     {"radio-version", no_argument, nullptr, OTBR_OPT_RADIO_VERSION},
+    {"auto-attach", optional_argument, nullptr, OTBR_OPT_AUTO_ATTACH},
     {0, 0, 0, 0}};
+
+static bool ParseInteger(const char *aStr, long &aOutResult)
+{
+    bool  successful = true;
+    char *strEnd;
+    long  result;
+
+    VerifyOrExit(aStr != nullptr, successful = false);
+    errno  = 0;
+    result = strtol(aStr, &strEnd, 0);
+    VerifyOrExit(errno != ERANGE, successful = false);
+    VerifyOrExit(aStr != strEnd, successful = false);
+
+    aOutResult = result;
+
+exit:
+    return successful;
+}
+
+static constexpr char kAutoAttachDisableArg[] = "--auto-attach=0";
+static char           sAutoAttachDisableArgStorage[sizeof(kAutoAttachDisableArg)];
+
+static std::vector<char *> AppendAutoAttachDisableArg(int argc, char *argv[])
+{
+    std::vector<char *> args(argv, argv + argc);
+
+    args.erase(std::remove_if(
+                   args.begin(), args.end(),
+                   [](const char *arg) { return arg != nullptr && std::string(arg).rfind("--auto-attach", 0) == 0; }),
+               args.end());
+    strcpy(sAutoAttachDisableArgStorage, kAutoAttachDisableArg);
+    args.push_back(sAutoAttachDisableArgStorage);
+    args.push_back(nullptr);
+
+    return args;
+}
 
 static void PrintHelp(const char *aProgramName)
 {
-    fprintf(stderr, "Usage: %s [-I interfaceName] [-B backboneIfName] [-d DEBUG_LEVEL] [-v] RADIO_URL [RADIO_URL]\n",
+    fprintf(stderr,
+            "Usage: %s [-I interfaceName] [-B backboneIfName] [-d DEBUG_LEVEL] [-v] [--auto-attach[=0/1]] RADIO_URL "
+            "[RADIO_URL]\n"
+            "    --auto-attach defaults to 1\n",
             aProgramName);
     fprintf(stderr, "%s", otSysGetRadioUrlHelpString());
 }
@@ -117,19 +163,17 @@ static otbrLogLevel GetDefaultLogLevel(void)
     return level;
 }
 
-static void PrintRadioVersion(otInstance *aInstance)
-{
-    printf("%s\n", otPlatRadioGetVersionString(aInstance));
-}
-
 static void PrintRadioVersionAndExit(const std::vector<const char *> &aRadioUrls)
 {
     otbr::Ncp::ControllerOpenThread ncpOpenThread{/* aInterfaceName */ "", aRadioUrls, /* aBackboneInterfaceName */ "",
-                                                  /* aDryRun */ true};
+                                                  /* aDryRun */ true, /* aEnableAutoAttach */ false};
+    const char *                    radioVersion;
 
     ncpOpenThread.Init();
 
-    PrintRadioVersion(ncpOpenThread.GetInstance());
+    radioVersion = otPlatRadioGetVersionString(ncpOpenThread.GetInstance());
+    otbrLogNotice("Radio version: %s", radioVersion);
+    printf("%s\n", radioVersion);
 
     ncpOpenThread.Deinit();
 
@@ -145,7 +189,9 @@ static int realmain(int argc, char *argv[])
     const char *              backboneInterfaceName = "";
     bool                      verbose               = false;
     bool                      printRadioVersion     = false;
+    bool                      enableAutoAttach      = true;
     std::vector<const char *> radioUrls;
+    long                      parseResult;
 
     std::set_new_handler(OnAllocateFailed);
 
@@ -158,8 +204,9 @@ static int realmain(int argc, char *argv[])
             break;
 
         case OTBR_OPT_DEBUG_LEVEL:
-            logLevel = static_cast<otbrLogLevel>(atoi(optarg));
-            VerifyOrExit(logLevel >= OTBR_LOG_EMERG && logLevel <= OTBR_LOG_DEBUG, ret = EXIT_FAILURE);
+            VerifyOrExit(ParseInteger(optarg, parseResult), ret = EXIT_FAILURE);
+            VerifyOrExit(OTBR_LOG_EMERG <= parseResult && parseResult <= OTBR_LOG_DEBUG, ret = EXIT_FAILURE);
+            logLevel = static_cast<otbrLogLevel>(parseResult);
             break;
 
         case OTBR_OPT_INTERFACE_NAME:
@@ -184,6 +231,18 @@ static int realmain(int argc, char *argv[])
             printRadioVersion = true;
             break;
 
+        case OTBR_OPT_AUTO_ATTACH:
+            if (optarg == nullptr)
+            {
+                enableAutoAttach = true;
+            }
+            else
+            {
+                VerifyOrExit(ParseInteger(optarg, parseResult), ret = EXIT_FAILURE);
+                enableAutoAttach = parseResult;
+            }
+            break;
+
         default:
             PrintHelp(argv[0]);
             ExitNow(ret = EXIT_FAILURE);
@@ -192,17 +251,14 @@ static int realmain(int argc, char *argv[])
     }
 
     otbrLogInit(kSyslogIdent, logLevel, verbose);
-    otbrLogInfo("Running %s", OTBR_PACKAGE_VERSION);
-    otbrLogInfo("Thread version: %s", otbr::Ncp::ControllerOpenThread::GetThreadVersion());
-    otbrLogInfo("Thread interface: %s", interfaceName);
-    otbrLogInfo("Backbone interface: %s", backboneInterfaceName);
-
-    otbr::InstanceParams::Get().SetThreadIfName(interfaceName);
-    otbr::InstanceParams::Get().SetBackboneIfName(backboneInterfaceName);
+    otbrLogNotice("Running %s", OTBR_PACKAGE_VERSION);
+    otbrLogNotice("Thread version: %s", otbr::Ncp::ControllerOpenThread::GetThreadVersion());
+    otbrLogNotice("Thread interface: %s", interfaceName);
+    otbrLogNotice("Backbone interface: %s", backboneInterfaceName);
 
     for (int i = optind; i < argc; i++)
     {
-        otbrLogInfo("Radio URL: %s", argv[i]);
+        otbrLogNotice("Radio URL: %s", argv[i]);
         radioUrls.push_back(argv[i]);
     }
 
@@ -213,8 +269,9 @@ static int realmain(int argc, char *argv[])
     }
 
     {
-        otbr::Application app(interfaceName, backboneInterfaceName, radioUrls);
+        otbr::Application app(interfaceName, backboneInterfaceName, radioUrls, enableAutoAttach);
 
+        gApp = &app;
         app.Init();
 
         ret = app.Run();
@@ -234,7 +291,9 @@ void otPlatReset(otInstance *aInstance)
 
     gPlatResetReason = OT_PLAT_RESET_REASON_SOFTWARE;
 
-    otSysDeinit();
+    VerifyOrDie(gApp != nullptr, "gApp is null");
+    gApp->Deinit();
+    gApp = nullptr;
 
     longjmp(sResetJump, 1);
     assert(false);
@@ -244,11 +303,14 @@ int main(int argc, char *argv[])
 {
     if (setjmp(sResetJump))
     {
+        std::vector<char *> args = AppendAutoAttachDisableArg(argc, argv);
+
         alarm(0);
 #if OPENTHREAD_ENABLE_COVERAGE
         __gcov_flush();
 #endif
-        execvp(argv[0], argv);
+
+        execvp(args[0], args.data());
     }
 
     return realmain(argc, argv);

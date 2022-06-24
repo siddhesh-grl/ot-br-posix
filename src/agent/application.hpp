@@ -34,6 +34,7 @@
 #ifndef OTBR_AGENT_APPLICATION_HPP_
 #define OTBR_AGENT_APPLICATION_HPP_
 
+#include <atomic>
 #include <signal.h>
 #include <stdint.h>
 #include <vector>
@@ -79,12 +80,16 @@ public:
     /**
      * This constructor initializes the Application instance.
      *
-     * @param[in] aOpenThread  A reference to the OpenThread instance.
+     * @param[in] aInterfaceName         Name of the Thread network interface.
+     * @param[in] aBackboneInterfaceName Name of the backbone network interface.
+     * @param[in] aRadioUrls             The radio URLs (can be IEEE802.15.4 or TREL radio).
+     * @param[in] aEnableAutoAttach      Whether or not to automatically attach to the saved network.
      *
      */
     explicit Application(const std::string &              aInterfaceName,
                          const std::string &              aBackboneInterfaceName,
-                         const std::vector<const char *> &aRadioUrls);
+                         const std::vector<const char *> &aRadioUrls,
+                         bool                             aEnableAutoAttach);
 
     /**
      * This method initializes the Application instance.
@@ -135,7 +140,7 @@ private:
     vendor::VendorServer mVendorServer;
 #endif
 
-    static bool sShouldTerminate;
+    static std::atomic_bool sShouldTerminate;
 };
 
 /**
