@@ -98,11 +98,14 @@
 #define OTBR_DBUS_PROPERTY_OT_RCP_VERSION "OtRcpVersion"
 #define OTBR_DBUS_PROPERTY_THREAD_VERSION "ThreadVersion"
 #define OTBR_DBUS_PROPERTY_EUI64 "Eui64"
+#define OTBR_DBUS_PROPERTY_MDNS_TELEMETRY_INFO "MdnsTelemetryInfo"
 
 #define OTBR_ROLE_NAME_DISABLED "disabled"
 #define OTBR_ROLE_NAME_DETACHED "detached"
 #define OTBR_ROLE_NAME_CHILD "child"
 #define OTBR_ROLE_NAME_ROUTER "router"
 #define OTBR_ROLE_NAME_LEADER "leader"
+
+#define OTBR_DBUS_SIGNAL_READY "Ready"
 
 #endif // OTBR_DBUS_CONSTANTS_HPP_

@@ -95,18 +95,23 @@ namespace DBus {
 
 DBusThreadObject::DBusThreadObject(DBusConnection *                 aConnection,
                                    const std::string &              aInterfaceName,
-                                   otbr::Ncp::ControllerOpenThread *aNcp)
+                                   otbr::Ncp::ControllerOpenThread *aNcp,
+                                   Mdns::Publisher *                aPublisher)
     : DBusObject(aConnection, OTBR_DBUS_OBJECT_PREFIX + aInterfaceName)
     , mNcp(aNcp)
+    , mPublisher(aPublisher)
 {
 }
 
 otbrError DBusThreadObject::Init(void)
 {
-    otbrError error        = DBusObject::Init();
+    otbrError error        = OTBR_ERROR_NONE;
     auto      threadHelper = mNcp->GetThreadHelper();
 
+    SuccessOrExit(error = DBusObject::Init());
+
     threadHelper->AddDeviceRoleHandler(std::bind(&DBusThreadObject::DeviceRoleHandler, this, _1));
+    threadHelper->AddActiveDatasetChangeHandler(std::bind(&DBusThreadObject::ActiveDatasetChangeHandler, this, _1));
     mNcp->RegisterResetHandler(std::bind(&DBusThreadObject::NcpResetHandler, this));
 
     RegisterMethod(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_SCAN_METHOD,
@@ -221,6 +226,8 @@ otbrError DBusThreadObject::Init(void)
                                std::bind(&DBusThreadObject::GetRadioRegionHandler, this, _1));
     RegisterGetPropertyHandler(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_SRP_SERVER_INFO,
                                std::bind(&DBusThreadObject::GetSrpServerInfoHandler, this, _1));
+    RegisterGetPropertyHandler(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_MDNS_TELEMETRY_INFO,
+                               std::bind(&DBusThreadObject::GetMdnsTelemetryInfoHandler, this, _1));
     RegisterGetPropertyHandler(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_DNSSD_COUNTERS,
                                std::bind(&DBusThreadObject::GetDnssdCountersHandler, this, _1));
     RegisterGetPropertyHandler(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_OT_HOST_VERSION,
@@ -230,6 +237,9 @@ otbrError DBusThreadObject::Init(void)
     RegisterGetPropertyHandler(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_THREAD_VERSION,
                                std::bind(&DBusThreadObject::GetThreadVersionHandler, this, _1));
 
+    SuccessOrExit(error = Signal(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_SIGNAL_READY, std::make_tuple()));
+
+exit:
     return error;
 }
 
@@ -241,6 +251,8 @@ void DBusThreadObject::DeviceRoleHandler(otDeviceRole aDeviceRole)
 void DBusThreadObject::NcpResetHandler(void)
 {
     mNcp->GetThreadHelper()->AddDeviceRoleHandler(std::bind(&DBusThreadObject::DeviceRoleHandler, this, _1));
+    mNcp->GetThreadHelper()->AddActiveDatasetChangeHandler(
+        std::bind(&DBusThreadObject::ActiveDatasetChangeHandler, this, _1));
     SignalPropertyChanged(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_DEVICE_ROLE,
                           GetDeviceRoleName(OT_DEVICE_ROLE_DISABLED));
 }
@@ -1270,6 +1282,16 @@ exit:
 #endif // OTBR_ENABLE_SRP_ADVERTISING_PROXY
 }
 
+otError DBusThreadObject::GetMdnsTelemetryInfoHandler(DBusMessageIter &aIter)
+{
+    otError error = OT_ERROR_NONE;
+
+    VerifyOrExit(DBusMessageEncodeToVariant(&aIter, mPublisher->GetMdnsTelemetryInfo()) == OTBR_ERROR_NONE,
+                 error = OT_ERROR_INVALID_ARGS);
+exit:
+    return error;
+}
+
 otError DBusThreadObject::GetDnssdCountersHandler(DBusMessageIter &aIter)
 {
 #if OTBR_ENABLE_DNSSD_DISCOVERY_PROXY
@@ -1396,6 +1418,13 @@ otError DBusThreadObject::GetThreadVersionHandler(DBusMessageIter &aIter)
 
 exit:
     return error;
+}
+
+void DBusThreadObject::ActiveDatasetChangeHandler(const otOperationalDatasetTlvs &aDatasetTlvs)
+{
+    std::vector<uint8_t> value(aDatasetTlvs.mLength);
+    std::copy(aDatasetTlvs.mTlvs, aDatasetTlvs.mTlvs + aDatasetTlvs.mLength, value.begin());
+    SignalPropertyChanged(OTBR_DBUS_THREAD_INTERFACE, OTBR_DBUS_PROPERTY_ACTIVE_DATASET_TLVS, value);
 }
 
 static_assert(OTBR_SRP_SERVER_STATE_DISABLED == static_cast<uint8_t>(OT_SRP_SERVER_STATE_DISABLED),
