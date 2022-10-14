@@ -178,6 +178,7 @@ int main() {
     string json_string="{\"firstName\": \"John\",\"lastName\": \"Smith\",\"age\": 25}";
     auto r2=client.request("POST", "/string", json_string);
     cout << r2->content.rdbuf() << endl;
+    cout<<"HELLO"<<std::endl;
     
     auto r3=client.request("POST", "/json", json_string);
     cout << r3->content.rdbuf() << endl;
